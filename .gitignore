@@ -1,0 +1,12 @@
+# Voxelized geometry (can be large)
+*.raw
+
+# Python virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Output folder
+output/
