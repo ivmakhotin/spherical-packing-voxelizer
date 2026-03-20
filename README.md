@@ -97,10 +97,10 @@ python3 voxelize.py <csv_file> [options]
 
 ```bash
 # Linux / macOS
-python3 voxelize.py ball_data.csv --spacing 0.1
+python3 voxelize.py data/ball_data.csv --spacing 0.1
 
 # Windows
-python voxelize.py ball_data.csv --spacing 0.1
+python voxelize.py data/ball_data.csv --spacing 0.1
 ```
 
 ### Full example
