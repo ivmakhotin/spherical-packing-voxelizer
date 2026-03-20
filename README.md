@@ -200,7 +200,7 @@ Domain {
 }
 ```
 
-- `voxel_length` is set to the `--spacing` value and is interpreted by LBPM in **micrometres (µm)**. Make sure your `--spacing` value is expressed in µm (e.g. if your DEM coordinates are in metres, multiply by 1 000 000).
+- `voxel_length` is set to `--voxel-length` if provided, otherwise falls back to `--spacing`. It is interpreted by LBPM in **micrometres (µm)**. If your coordinates are not in µm, use `--voxel-length` to set the correct physical voxel size without affecting the voxelization grid.
 - `BC = 0` means periodic boundaries. With a body force (`F` in the `BGK` block), flow is driven along the specified axis.
 - The Z axis is the primary flow direction in LBPM — if your packing has a preferred direction, align it with Z.
 
