@@ -3,6 +3,7 @@
 
 # Python virtual environment
 .venv/
+.claude/
 
 # Python cache
 __pycache__/
