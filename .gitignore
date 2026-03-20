@@ -8,6 +8,3 @@
 # Python cache
 __pycache__/
 *.pyc
-
-# Output folder
-output/

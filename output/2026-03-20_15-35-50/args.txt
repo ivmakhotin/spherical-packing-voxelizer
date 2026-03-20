@@ -1,0 +1,30 @@
+Command: python3 voxelize.py data/ball_data.csv --spacing 0.1 --xmin -5 --xmax 5 --ymin -5 --ymax 5 --zmin -5 --zmax 5 --mode coverage --sub-samples 4 --threshold 0.5 --output geometry
+
+csv: data/ball_data.csv
+mode: coverage
+no_slices: False
+output: geometry
+pore_label: 1
+slice_x: None
+slice_y: None
+slice_z: None
+solid_label: 0
+spacing: 0.1
+sub_samples: 4
+threshold: 0.5
+voxel_length: None
+xmax: 5.0
+xmin: -5.0
+ymax: 5.0
+ymin: -5.0
+zmax: 5.0
+zmin: -5.0
+
+# Resolved values
+xmin: -5.0  xmax: 5.0
+ymin: -5.0  ymax: 5.0
+zmin: -5.0  zmax: 5.0
+voxel_length (um): 0.1
+Nx: 100  Ny: 100  Nz: 100
+solid_fraction: 51.22%
+pore_fraction:  48.78%

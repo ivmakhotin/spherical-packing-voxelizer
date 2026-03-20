@@ -1,0 +1,11 @@
+Domain {
+    Filename = "geometry.raw"
+    ReadType = "8bit"
+    N = 200, 200, 200
+    nproc = 1, 1, 1
+    n = 200, 200, 200
+    voxel_length = 0.05
+    ReadValues  = 0, 1
+    WriteValues = 0, 1
+    BC = 0
+}
