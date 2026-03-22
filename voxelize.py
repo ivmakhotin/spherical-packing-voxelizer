@@ -24,6 +24,67 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+# ── optional numba acceleration ───────────────────────────────────────────────
+try:
+    import numba
+
+    @numba.njit(parallel=True, cache=True)
+    def _coverage_kernel_nb(
+        sx_arr, sy_arr, sz_arr, sr_arr,
+        k_min_arr, k_max_arr,
+        ix0_arr, ix1_arr, iy0_arr, iy1_arr,
+        scx, scy, scz,
+        sub_spacing, SNx, SNy, n_sub, Nz, Ny, Nx,
+        zmin, min_count, solid_label, pore_label,
+    ):
+        """Numba parallel coverage kernel: one thread per Z-slice via prange."""
+        grid = np.empty((Nz, Ny, Nx), dtype=np.int8)
+        for k in numba.prange(Nz):
+            sub_slice = np.zeros((n_sub, SNy, SNx), dtype=np.bool_)
+            sz0_sub = k * n_sub
+            for si in range(len(sx_arr)):
+                if k_min_arr[si] > k or k_max_arr[si] < k:
+                    continue
+                sx = sx_arr[si]
+                sy = sy_arr[si]
+                sz = sz_arr[si]
+                sr = sr_arr[si]
+                sr2 = sr * sr
+                local_iz0 = max(0, int((sz - sr - zmin) / sub_spacing) - sz0_sub)
+                local_iz1 = min(n_sub - 1, int((sz + sr - zmin) / sub_spacing) - sz0_sub)
+                if local_iz0 > local_iz1:
+                    continue
+                ix0 = ix0_arr[si]
+                ix1 = ix1_arr[si]
+                iy0 = iy0_arr[si]
+                iy1 = iy1_arr[si]
+                if ix0 > ix1 or iy0 > iy1:
+                    continue
+                for dz in range(local_iz0, local_iz1 + 1):
+                    z_d2 = (scz[sz0_sub + dz] - sz) ** 2
+                    for dy in range(iy0, iy1 + 1):
+                        yz_d2 = z_d2 + (scy[dy] - sy) ** 2
+                        for dx in range(ix0, ix1 + 1):
+                            if yz_d2 + (scx[dx] - sx) ** 2 <= sr2:
+                                sub_slice[dz, dy, dx] = True
+            # Downsample: count solid sub-voxels per parent voxel
+            for j in range(Ny):
+                for i in range(Nx):
+                    cnt = 0
+                    for dz in range(n_sub):
+                        for dy in range(n_sub):
+                            for dx in range(n_sub):
+                                if sub_slice[dz, j * n_sub + dy, i * n_sub + dx]:
+                                    cnt += 1
+                    grid[k, j, i] = solid_label if cnt >= min_count else pore_label
+        return grid
+
+    _NUMBA_AVAILABLE = True
+
+except ImportError:
+    _NUMBA_AVAILABLE = False
+# ─────────────────────────────────────────────────────────────────────────────
+
 
 def parse_args():
     p = argparse.ArgumentParser(
@@ -98,6 +159,12 @@ def parse_args():
     p.add_argument(
         "--no-slices", action="store_true",
         help="Disable PNG slice output entirely."
+    )
+    p.add_argument(
+        "--fast", action="store_true",
+        help="Use voxelize_coverage_fast (pre-filtering + numba/multiprocessing) "
+             "instead of the baseline coverage implementation. "
+             "Only applies to --mode coverage."
     )
 
     return p.parse_args()
@@ -244,6 +311,131 @@ def voxelize_coverage(df, xmin, xmax, ymin, ymax, zmin, zmax, spacing,
     return grid, Nx, Ny, Nz
 
 
+def _process_slice_batch(args):
+    """Multiprocessing worker: process a contiguous batch of Z-slices (numpy fallback)."""
+    (k_start, k_end,
+     sx_arr, sy_arr, sz_arr, sr_arr,
+     k_min_arr, k_max_arr,
+     ix0_arr, ix1_arr, iy0_arr, iy1_arr,
+     scx, scy, scz,
+     sub_spacing, SNx, SNy, n_sub, Ny, Nx,
+     zmin, min_count, solid_label, pore_label) = args
+
+    chunk = np.empty((k_end - k_start, Ny, Nx), dtype=np.int8)
+    for k_local, k in enumerate(range(k_start, k_end)):
+        sub_slice = np.zeros((n_sub, SNy, SNx), dtype=bool)
+        sz0_sub = k * n_sub
+        for si in np.where((k_min_arr <= k) & (k_max_arr >= k))[0]:
+            sx = sx_arr[si]; sy = sy_arr[si]; sz = sz_arr[si]; sr = sr_arr[si]
+            local_iz0 = max(0, int((sz - sr - zmin) / sub_spacing) - sz0_sub)
+            local_iz1 = min(n_sub - 1, int((sz + sr - zmin) / sub_spacing) - sz0_sub)
+            if local_iz0 > local_iz1:
+                continue
+            ix0 = ix0_arr[si]; ix1 = ix1_arr[si]
+            iy0 = iy0_arr[si]; iy1 = iy1_arr[si]
+            if ix0 > ix1 or iy0 > iy1:
+                continue
+            lz = scz[sz0_sub + local_iz0: sz0_sub + local_iz1 + 1]
+            dist2 = (
+                (lz[:, None, None]                 - sz) ** 2 +
+                (scy[iy0:iy1 + 1][None, :, None]   - sy) ** 2 +
+                (scx[ix0:ix1 + 1][None, None, :]   - sx) ** 2
+            )
+            sub_slice[local_iz0:local_iz1 + 1, iy0:iy1 + 1, ix0:ix1 + 1] |= (dist2 <= sr ** 2)
+        counts = sub_slice.reshape(n_sub, Ny, n_sub, Nx, n_sub).sum(axis=(0, 2, 4))
+        chunk[k_local] = np.where(counts >= min_count, solid_label, pore_label).astype(np.int8)
+    return k_start, chunk
+
+
+def voxelize_coverage_fast(df, xmin, xmax, ymin, ymax, zmin, zmax, spacing,
+                            solid_label=0, pore_label=1, n_sub=4, threshold=0.5):
+    """
+    Optimised drop-in replacement for voxelize_coverage. Same signature and output.
+
+    Improvements over the baseline:
+      1. Sphere data extracted as numpy arrays (no .iterrows()).
+      2. Per-slice sphere pre-filtering via precomputed k_min / k_max arrays,
+         so each Z-slice only touches spheres that actually overlap it.
+      3a. numba (if installed): JIT-compiled loops with prange parallelism over
+          Z-slices — effectively free multi-core parallelism with no pickling.
+      3b. multiprocessing fallback (if numba unavailable): Z-slices divided
+          across all CPU cores via concurrent.futures.ProcessPoolExecutor.
+    """
+    Nx = max(1, int(np.ceil((xmax - xmin) / spacing)))
+    Ny = max(1, int(np.ceil((ymax - ymin) / spacing)))
+    Nz = max(1, int(np.ceil((zmax - zmin) / spacing)))
+
+    print(f"Grid: Nx={Nx}  Ny={Ny}  Nz={Nz}  ({Nx*Ny*Nz:,} voxels)")
+
+    sub_spacing = spacing / n_sub
+    SNx = Nx * n_sub
+    SNy = Ny * n_sub
+    SNz = Nz * n_sub
+
+    backend = "numba" if _NUMBA_AVAILABLE else "multiprocessing"
+    print(f"Coverage mode (fast/{backend}): {n_sub}^3={n_sub**3} sub-samples/voxel, "
+          f"threshold={threshold:.0%}")
+
+    # --- 1. Extract sphere data as contiguous numpy arrays (no .iterrows()) --
+    sx_arr = df["X"].to_numpy(dtype=np.float64)
+    sy_arr = df["Y"].to_numpy(dtype=np.float64)
+    sz_arr = df["Z"].to_numpy(dtype=np.float64)
+    sr_arr = df["R"].to_numpy(dtype=np.float64)
+
+    # Sub-voxel centre coordinates (identical to baseline)
+    scx = xmin + (np.arange(SNx) + 0.5) * sub_spacing
+    scy = ymin + (np.arange(SNy) + 0.5) * sub_spacing
+    scz = zmin + (np.arange(SNz) + 0.5) * sub_spacing
+
+    min_count = int(np.ceil(threshold * n_sub ** 3))
+
+    # --- 2. Pre-compute Z-slice and sub-voxel XY bounding boxes per sphere --
+    # Uses floor to match the original int() truncation for positive values.
+    k_min_arr = np.maximum(0,       np.floor((sz_arr - sr_arr - zmin) / spacing).astype(np.int64))
+    k_max_arr = np.minimum(Nz - 1,  np.floor((sz_arr + sr_arr - zmin) / spacing).astype(np.int64))
+
+    ix0_arr = np.maximum(0,       np.floor((sx_arr - sr_arr - xmin) / sub_spacing).astype(np.int64))
+    ix1_arr = np.minimum(SNx - 1, np.floor((sx_arr + sr_arr - xmin) / sub_spacing).astype(np.int64))
+    iy0_arr = np.maximum(0,       np.floor((sy_arr - sr_arr - ymin) / sub_spacing).astype(np.int64))
+    iy1_arr = np.minimum(SNy - 1, np.floor((sy_arr + sr_arr - ymin) / sub_spacing).astype(np.int64))
+
+    # --- 3a. Numba parallel kernel (preferred) --------------------------------
+    if _NUMBA_AVAILABLE:
+        print("  Compiling / running numba kernel …")
+        grid = _coverage_kernel_nb(
+            sx_arr, sy_arr, sz_arr, sr_arr,
+            k_min_arr, k_max_arr,
+            ix0_arr, ix1_arr, iy0_arr, iy1_arr,
+            scx, scy, scz,
+            sub_spacing, SNx, SNy, n_sub, Nz, Ny, Nx,
+            zmin, min_count,
+            np.int8(solid_label), np.int8(pore_label),
+        )
+        return grid, Nx, Ny, Nz
+
+    # --- 3b. Multiprocessing fallback ----------------------------------------
+    from concurrent.futures import ProcessPoolExecutor
+    n_workers = os.cpu_count() or 4
+    chunk_size = max(1, (Nz + n_workers - 1) // n_workers)
+    batches = [(k, min(k + chunk_size, Nz)) for k in range(0, Nz, chunk_size)]
+    print(f"  Multiprocessing: {n_workers} workers, {len(batches)} batches")
+
+    common = (sx_arr, sy_arr, sz_arr, sr_arr,
+              k_min_arr, k_max_arr,
+              ix0_arr, ix1_arr, iy0_arr, iy1_arr,
+              scx, scy, scz,
+              sub_spacing, SNx, SNy, n_sub, Ny, Nx,
+              zmin, min_count, solid_label, pore_label)
+
+    grid = np.empty((Nz, Ny, Nx), dtype=np.int8)
+    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        args_list = [(ks, ke) + common for ks, ke in batches]
+        for k_start, chunk in executor.map(_process_slice_batch, args_list):
+            grid[k_start: k_start + chunk.shape[0]] = chunk
+
+    return grid, Nx, Ny, Nz
+
+
 def save_slice(slice_2d, axis, index, output_base, solid_label, out_dir):
     """Save a single 2D cross-section as a grayscale PNG.
 
@@ -355,7 +547,8 @@ def main():
 
     # --- Voxelize ---
     if args.mode == "coverage":
-        grid, Nx, Ny, Nz = voxelize_coverage(
+        fn = voxelize_coverage_fast if args.fast else voxelize_coverage
+        grid, Nx, Ny, Nz = fn(
             df, xmin, xmax, ymin, ymax, zmin, zmax, args.spacing,
             solid_label=args.solid_label, pore_label=args.pore_label,
             n_sub=args.sub_samples, threshold=args.threshold,

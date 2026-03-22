@@ -1,0 +1,11 @@
+Domain {
+    Filename = "ref.raw"
+    ReadType = "8bit"
+    N = 1000, 1000, 1000
+    nproc = 1, 1, 1
+    n = 1000, 1000, 1000
+    voxel_length = 0.01
+    ReadValues  = 0, 1
+    WriteValues = 0, 1
+    BC = 0
+}

@@ -21,7 +21,29 @@ Each run creates a timestamped folder `output/YYYY-MM-DD_HH-MM-SS/` containing:
 
 ## Installation
 
-### 1. Install Python 3
+> **Python version:** Python 3.9 or newer is required. The `numba` dependency (used for the `--fast` acceleration) does not support Python 3.6/3.7/3.8.
+
+### On NCI Gadi (HPC)
+
+```bash
+# 1. Load a Python 3.9+ module
+module load python3/3.12.1
+
+# 2. Confirm the version
+python3.12 --version
+
+# 3. Create a virtual environment using the module's Python
+python3.12 -m venv .venv
+
+# 4. Activate it
+source .venv/bin/activate
+
+# 5. Install dependencies
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+### On a standard Linux / macOS system
 
 **Linux (RHEL/CentOS):**
 ```bash
@@ -38,52 +60,29 @@ sudo apt install python3 python3-venv
 brew install python
 ```
 
-**Windows:**
+```bash
+cd spherical-packing-voxelizer
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+### On Windows
 
 1. Download the installer from https://www.python.org/downloads/windows/
 2. Run the installer — **check "Add Python to PATH"** before clicking Install
-3. Verify in a new Command Prompt or PowerShell:
-```cmd
-python --version
-```
-
-### 2. Create a virtual environment
-
-```bash
-# Linux / macOS
-cd spherical-packing-voxelizer
-python3 -m venv .venv
-```
+3. Open Command Prompt or PowerShell in the project folder:
 
 ```cmd
-:: Windows
-cd spherical-packing-voxelizer
 python -m venv .venv
-```
-
-### 3. Activate the environment
-
-```bash
-# Linux / macOS
-source .venv/bin/activate
-```
-
-```cmd
-:: Windows (Command Prompt)
 .venv\Scripts\activate.bat
-
-:: Windows (PowerShell)
-.venv\Scripts\Activate.ps1
+pip install --upgrade pip
+pip install -r requirements.txt
 ```
 
 > **PowerShell note:** if you get an error about execution policy, run:
 > `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`
-
-### 4. Install dependencies
-
-```bash
-pip install -r requirements.txt
-```
 
 ---
 
@@ -142,6 +141,7 @@ If not specified, bounds are auto-detected from the data with a margin of one ma
 | Argument | Description |
 |----------|-------------|
 | `--mode` | Voxelization method: `center` (default) or `coverage` |
+| `--fast` | Use the optimised coverage implementation (see below). Only applies to `--mode coverage`. |
 
 #### `center` mode (default, fast)
 
@@ -155,6 +155,7 @@ A voxel is marked **solid** if the fraction of its volume covered by sphere(s) i
 |----------|---------|-------------|
 | `--sub-samples N` | `4` | Sub-divisions per voxel axis (`N³` samples per voxel). Higher = more accurate, more compute. |
 | `--threshold F` | `0.5` | Minimum solid volume fraction to classify a voxel as solid (0–1). |
+| `--fast` | off | Enables `voxelize_coverage_fast`: pre-filters spheres per Z-slice and parallelises across all CPU cores. If `numba` is installed the inner loops are JIT-compiled (fastest); otherwise `multiprocessing` is used as a fallback. Produces identical results to the baseline. Recommended for grids larger than ~500³. |
 
 ### Output
 
