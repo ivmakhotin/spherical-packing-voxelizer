@@ -1,6 +1,6 @@
 # Spherical Packing Voxelizer
 
-Converts DEM sphere packing data (CSV) into a binary voxel geometry file ready for fluid flow simulation with **LBPM (Lattice Boltzmann Phase-field Model)**.
+Converts DEM sphere packing data (CSV) into a binary voxel geometry file ready for fluid flow simulation with **LBPM (Lattice Boltzmann for Porous Media)**.
 
 - LBPM repository: https://github.com/OPM/LBPM
 - LBPM documentation: https://lbpm-sim.org
